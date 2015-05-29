@@ -9,11 +9,22 @@ namespace MailWinService
         /// </summary>
         static void Main()
         {
-            var servicesToRun = new ServiceBase[] 
-            { 
-                new MailService() 
-            };
-            ServiceBase.Run(servicesToRun);
+            //Denug yapmak için false yapılması gerekiyor
+            const bool debug = true;
+
+            if (debug)
+            {
+                var servicesToRun = new ServiceBase[] 
+                { 
+                    new MailService() 
+                };
+                ServiceBase.Run(servicesToRun);
+            }
+            else
+            {
+                MailService myService = new MailService();
+                myService.MyServiceOnStart();
+            }
         }
     }
 }
