@@ -1,19 +1,35 @@
-﻿using System.Diagnostics;
+﻿using System;
+using System.Data;
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
 using System.ServiceProcess;
+using System.Threading;
 
 namespace MailWinService
 {
     public partial class MailService : ServiceBase
     {
         private EventLog _eventLog;
-
+        private Timer _timer;
         public MailService()
         {
             InitializeComponent();
         }
 
+        public void MyServiceOnStart()
+        {
+          //Debug işlemleri burada
+        }
+
         protected override void OnStart(string[] args)
         {
+
+            // Timer çalışmadan önce 1(1000ms) saniye bekelr
+            // Her 1(60000ms) dakikada tetiklenir
+            // MailSync metotu null parametresi ile çalıştırılır
+            _timer = new Timer(MailSync, null, 1000, 60000);
+
             _eventLog = new EventLog();
             if (!EventLog.SourceExists("SampleSource"))
             {
@@ -39,6 +55,11 @@ namespace MailWinService
             _eventLog.Source = "SampleSource";
             _eventLog.WriteEntry("Our service was stopped.");
 
+        }
+
+        protected void MailSync(object sender)
+        {
+            //Mail işlemleri
         }
     }
 }
