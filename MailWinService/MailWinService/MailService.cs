@@ -96,9 +96,10 @@ namespace MailWinService
                     smtpClient.Send(mailMessage);
                     smtpClient.Dispose();
                     DbOperation.Execute("update MailBox set IsSent='true' where Id=" + mailBox["Id"].ToString());
-                   
+
                 }
             }
+
         }
 
         protected void InboxMailSync(object sender)
@@ -106,11 +107,12 @@ namespace MailWinService
             var mailAccounts = DbOperation.Data("Select * from Mail");
             foreach (DataRow mailAccount in mailAccounts.Rows)
             {
+                string mailAddress = mailAccount["MailAddress"].ToString();
                 var mails = FetchAllMessages(
                     mailAccount["IncomingMailServer"].ToString(),
                    Convert.ToInt32(mailAccount["IncomingMailPort"]),
                    true,
-                   mailAccount["MailAddress"].ToString(),
+                   mailAddress,
                    mailAccount["Password"].ToString());
                 foreach (var message in mails)
                 {
@@ -123,8 +125,8 @@ namespace MailWinService
                         string[] values =
                     {
                         message.Headers.Subject,
-                        Encoding.ASCII.GetString(message.MessagePart.Body),
-                         mailAccount["MailAddress"].ToString(),
+                        message.MessagePart.IsText?message.MessagePart.GetBodyAsText():Encoding.UTF8.GetString(message.MessagePart.MessageParts.FirstOrDefault().Body),
+                         mailAddress,
                          "false",
                          message.Headers.From.Address,
                          "false",
@@ -135,9 +137,7 @@ namespace MailWinService
                         DbOperation.Execute(parameters, values, command);
                     }
                 }
-
             }
-
         }
 
         public List<Message> FetchAllMessages(string hostname, int port, bool useSsl, string username, string password)
@@ -164,7 +164,7 @@ namespace MailWinService
                 {
                     allMessages.Add(client.GetMessage(i));
                 }
-                
+
                 // Now return the fetched messages
                 return allMessages;
             }
