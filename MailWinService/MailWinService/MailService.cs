@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Data;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Mail;
@@ -73,56 +74,65 @@ namespace MailWinService
         /// <param name="sender"></param>
         protected void OutboxMailSync(object sender)
         {
-            var mailBoxes = DbOperation.Data("Select * from MailBox where IsSent='false' and IsDeleted='false' and IsInbox='false' and Sender in (select Mail.MailAddress from Mail)");
-            var mailAccounts = DbOperation.Data("Select * from Mail");
-
-            foreach (DataRow mailBox in mailBoxes.Rows)
+            try
             {
-                var mailAccount = (from DataRow a in mailAccounts.Rows
-                                   where mailBox != null && a["MailAddress"].ToString() == mailBox["Sender"].ToString()
-                                   select a).FirstOrDefault();
-                if (mailAccount != null)
-                {
-                    var smtpClient = new SmtpClient(mailAccount["OutGoingMailServer"].ToString(), Convert.ToInt32(mailAccount["OutGoingMailPort"]))
-                    {
-                        Credentials = new NetworkCredential(mailAccount["MailAddress"].ToString(), mailAccount["Password"].ToString()),
-                        EnableSsl = true
-                    };
-                    var mailMessage = new MailMessage { From = new MailAddress(mailAccount["MailAddress"].ToString(), mailAccount["Username"].ToString()) };
-                    mailMessage.To.Add(mailBox["MailTo"].ToString());
-                    mailMessage.Subject = mailBox["Subject"].ToString();
-                    mailMessage.IsBodyHtml = true;
-                    mailMessage.Body = mailBox["Content"].ToString();
-                    smtpClient.Send(mailMessage);
-                    smtpClient.Dispose();
-                    DbOperation.Execute("update MailBox set IsSent='true' where Id=" + mailBox["Id"].ToString());
+                var mailBoxes = DbOperation.Data("Select * from MailBox where IsSent='false' and IsDeleted='false' and IsInbox='false' and Sender in (select Mail.MailAddress from Mail)");
+                var mailAccounts = DbOperation.Data("Select * from Mail");
 
+                foreach (DataRow mailBox in mailBoxes.Rows)
+                {
+                    var mailAccount = (from DataRow a in mailAccounts.Rows
+                                       where mailBox != null && a["MailAddress"].ToString() == mailBox["Sender"].ToString()
+                                       select a).FirstOrDefault();
+                    if (mailAccount != null)
+                    {
+                        var smtpClient = new SmtpClient(mailAccount["OutGoingMailServer"].ToString(), Convert.ToInt32(mailAccount["OutGoingMailPort"]))
+                        {
+                            Credentials = new NetworkCredential(mailAccount["MailAddress"].ToString(), mailAccount["Password"].ToString()),
+                            EnableSsl = true
+                        };
+                        var mailMessage = new MailMessage { From = new MailAddress(mailAccount["MailAddress"].ToString(), mailAccount["Username"].ToString()) };
+                        mailMessage.To.Add(mailBox["MailTo"].ToString());
+                        mailMessage.Subject = mailBox["Subject"].ToString();
+                        mailMessage.IsBodyHtml = true;
+                        mailMessage.Body = mailBox["Content"].ToString();
+                        smtpClient.Send(mailMessage);
+                        smtpClient.Dispose();
+                        DbOperation.Execute("update MailBox set IsSent='true' where Id=" + mailBox["Id"].ToString());
+
+                    }
                 }
+            }
+            catch (Exception e)
+            {
+                Logging(e.Message);
             }
 
         }
 
         protected void InboxMailSync(object sender)
         {
-            var mailAccounts = DbOperation.Data("Select * from Mail");
-            foreach (DataRow mailAccount in mailAccounts.Rows)
+            try
             {
-                string mailAddress = mailAccount["MailAddress"].ToString();
-                var mails = FetchAllMessages(
-                    mailAccount["IncomingMailServer"].ToString(),
-                   Convert.ToInt32(mailAccount["IncomingMailPort"]),
-                   true,
-                   mailAddress,
-                   mailAccount["Password"].ToString());
-                foreach (var message in mails)
+                var mailAccounts = DbOperation.Data("Select * from Mail");
+                foreach (DataRow mailAccount in mailAccounts.Rows)
                 {
-                    var DbMail = DbOperation.Data("select * from Mailbox where EmailId like '" + message.Headers.MessageId + "'");
-                    if (DbMail.Rows.Count == 0)
+                    string mailAddress = mailAccount["MailAddress"].ToString();
+                    var mails = FetchAllMessages(
+                        mailAccount["IncomingMailServer"].ToString(),
+                       Convert.ToInt32(mailAccount["IncomingMailPort"]),
+                       true,
+                       mailAddress,
+                       mailAccount["Password"].ToString());
+                    foreach (var message in mails)
                     {
-                        string command = "insert into MailBox ([Subject],[Content],[MailTo],[IsSent],[Sender],[IsInbox],[CreatedDate],[IsActive],[IsDeleted],[EmailId])" +
-                  "values (@Subject,@Content,@MailTo,@IsSent,@Sender,@IsInbox,GETDATE(),@IsActive,@IsDeleted,@EmailId)";
-                        string[] parameters = { "@Subject", "@Content", "@MailTo", "@IsSent", "@Sender", "@IsInbox", "@IsActive", "@IsDeleted", "@EmailId" };
-                        string[] values =
+                        var DbMail = DbOperation.Data("select * from Mailbox where EmailId like '" + message.Headers.MessageId + "'");
+                        if (DbMail.Rows.Count == 0)
+                        {
+                            string command = "insert into MailBox ([Subject],[Content],[MailTo],[IsSent],[Sender],[IsInbox],[CreatedDate],[IsActive],[IsDeleted],[EmailId])" +
+                      "values (@Subject,@Content,@MailTo,@IsSent,@Sender,@IsInbox,GETDATE(),@IsActive,@IsDeleted,@EmailId)";
+                            string[] parameters = { "@Subject", "@Content", "@MailTo", "@IsSent", "@Sender", "@IsInbox", "@IsActive", "@IsDeleted", "@EmailId" };
+                            string[] values =
                     {
                         message.Headers.Subject,
                         message.MessagePart.IsText?message.MessagePart.GetBodyAsText():Encoding.UTF8.GetString(message.MessagePart.MessageParts.FirstOrDefault().Body),
@@ -134,10 +144,16 @@ namespace MailWinService
                          "false",
                          message.Headers.MessageId
                     };
-                        DbOperation.Execute(parameters, values, command);
+                            DbOperation.Execute(parameters, values, command);
+                        }
                     }
                 }
             }
+            catch (Exception e)
+            {
+                Logging(e.Message);
+            }
+
         }
 
         public List<Message> FetchAllMessages(string hostname, int port, bool useSsl, string username, string password)
@@ -167,6 +183,15 @@ namespace MailWinService
 
                 // Now return the fetched messages
                 return allMessages;
+            }
+        }
+
+        private void Logging(string logText)
+        {
+            const string path = "C:\\MailService\\Logging.txt";
+            using (StreamWriter sw = (File.Exists(path)) ? File.AppendText(path) : File.CreateText(path))
+            {
+                sw.WriteLine(DateTime.Now + " - Hata: " + logText);
             }
         }
     }
