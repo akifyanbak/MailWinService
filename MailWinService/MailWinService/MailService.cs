@@ -139,7 +139,7 @@ namespace MailWinService
                          mailAddress,
                          "false",
                          message.Headers.From.Address,
-                         "false",
+                         "true",
                          "true",
                          "false",
                          message.Headers.MessageId
