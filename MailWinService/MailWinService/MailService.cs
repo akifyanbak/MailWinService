@@ -9,6 +9,8 @@ using System.Net.Mail;
 using System.ServiceProcess;
 using System.Text;
 using System.Threading;
+using ljk.data.Context;
+using ljk.data.Domain;
 using OpenPop.Mime;
 using OpenPop.Pop3;
 
@@ -26,7 +28,8 @@ namespace MailWinService
 
         public void MyServiceOnStart()
         {
-            InboxMailSync(null);
+            //InboxMailSync(null);
+            OutboxMailSync(null);
             //MailSync(null);
             //Debug işlemleri burada
         }
@@ -76,30 +79,34 @@ namespace MailWinService
         {
             try
             {
-                var mailBoxes = DbOperation.Data("Select * from MailBox where IsSent='false' and IsDeleted='false' and IsInbox='false' and Sender in (select Mail.MailAddress from Mail)");
-                var mailAccounts = DbOperation.Data("Select * from Mail");
+                var ljkContext = new LjkContext();
+                var mailBoxes = ljkContext.MailBoxes.Where(m => !m.IsSent && !m.IsInbox).ToList();
+                var mailAccounts = ljkContext.Mails.ToList();
 
-                foreach (DataRow mailBox in mailBoxes.Rows)
+                foreach (var mailBox in mailBoxes)
                 {
-                    var mailAccount = (from DataRow a in mailAccounts.Rows
-                                       where mailBox != null && a["MailAddress"].ToString() == mailBox["Sender"].ToString()
-                                       select a).FirstOrDefault();
+                    var mailAccount = mailAccounts.FirstOrDefault(m => m.MailAddress == mailBox.Sender);
                     if (mailAccount != null)
                     {
-                        var smtpClient = new SmtpClient(mailAccount["OutGoingMailServer"].ToString(), Convert.ToInt32(mailAccount["OutGoingMailPort"]))
+                        var smtpClient = new SmtpClient(mailAccount.OutgoingMailServer, mailAccount.OutgoingMailPort)
                         {
-                            Credentials = new NetworkCredential(mailAccount["MailAddress"].ToString(), mailAccount["Password"].ToString()),
+                            Credentials = new NetworkCredential(mailAccount.MailAddress, mailAccount.Password),
                             EnableSsl = true
                         };
-                        var mailMessage = new MailMessage { From = new MailAddress(mailAccount["MailAddress"].ToString(), mailAccount["Username"].ToString()) };
-                        mailMessage.To.Add(mailBox["MailTo"].ToString());
-                        mailMessage.Subject = mailBox["Subject"].ToString();
+                        var mailMessage = new MailMessage { From = new MailAddress(mailAccount.MailAddress, mailAccount.Username) };
+                        mailMessage.To.Add(mailBox.MailTo);
+                        mailMessage.Subject = mailBox.Subject;
                         mailMessage.IsBodyHtml = true;
-                        mailMessage.Body = mailBox["Content"].ToString();
+                        mailMessage.Body = mailBox.Content;
+                        foreach (var attach in mailBox.Attaches)
+                        {
+                            Attachment data = new Attachment(attach.FilePath);
+                            mailMessage.Attachments.Add(data);
+                        }
                         smtpClient.Send(mailMessage);
                         smtpClient.Dispose();
-                        DbOperation.Execute("update MailBox set IsSent='true' where Id=" + mailBox["Id"].ToString());
-
+                        mailBox.IsSent = true;
+                        ljkContext.SaveChanges();
                     }
                 }
             }
@@ -114,37 +121,57 @@ namespace MailWinService
         {
             try
             {
-                var mailAccounts = DbOperation.Data("Select * from Mail");
-                foreach (DataRow mailAccount in mailAccounts.Rows)
+                var ljkContext = new LjkContext();
+                var mailAccounts = ljkContext.Mails.ToList();
+
+                foreach (var mailAccount in mailAccounts)
                 {
-                    string mailAddress = mailAccount["MailAddress"].ToString();
                     var mails = FetchAllMessages(
-                        mailAccount["IncomingMailServer"].ToString(),
-                       Convert.ToInt32(mailAccount["IncomingMailPort"]),
+                        mailAccount.IncomingMailServer,
+                      mailAccount.IncomingMailPort,
                        true,
-                       mailAddress,
-                       mailAccount["Password"].ToString());
+                       mailAccount.MailAddress,
+                       mailAccount.Password);
                     foreach (var message in mails)
                     {
-                        var DbMail = DbOperation.Data("select * from Mailbox where EmailId like '" + message.Headers.MessageId + "'");
-                        if (DbMail.Rows.Count == 0)
+                        if (message != null)
                         {
-                            string command = "insert into MailBox ([Subject],[Content],[MailTo],[IsSent],[Sender],[IsInbox],[CreatedDate],[IsActive],[IsDeleted],[EmailId])" +
-                      "values (@Subject,@Content,@MailTo,@IsSent,@Sender,@IsInbox,GETDATE(),@IsActive,@IsDeleted,@EmailId)";
-                            string[] parameters = { "@Subject", "@Content", "@MailTo", "@IsSent", "@Sender", "@IsInbox", "@IsActive", "@IsDeleted", "@EmailId" };
-                            string[] values =
-                    {
-                        message.Headers.Subject,
-                        message.MessagePart.IsText?message.MessagePart.GetBodyAsText():Encoding.UTF8.GetString(message.MessagePart.MessageParts.FirstOrDefault().Body),
-                         mailAddress,
-                         "false",
-                         message.Headers.From.Address,
-                         "true",
-                         "true",
-                         "false",
-                         message.Headers.MessageId
-                    };
-                            DbOperation.Execute(parameters, values, command);
+                            // Mail veritabanında kayıtlı değilse girecek
+                            if (!ljkContext.MailBoxes.Any(m => m.EmailId == message.Headers.MessageId))
+                            {
+                                var attaches = new List<Attach>();
+                                var mailbox = new MailBox()
+                                {
+                                    Content = MessageText(message.MessagePart),
+                                    EmailId = message.Headers.MessageId,
+                                    Sender = message.Headers.From.Address,
+                                    MailTo = mailAccount.MailAddress,
+                                    IsInbox = true,
+                                    Subject = message.Headers.Subject
+                                };
+
+                                if (message.MessagePart.IsMultiPart)
+                                {
+                                    foreach (var part in message.MessagePart.MessageParts)
+                                    {
+                                        if (part.IsAttachment)
+                                        {
+                                            var attach = new Attach
+                                            {
+                                                FileName = Guid.NewGuid() + "-" + part.FileName,
+                                                FileData = part.Body,
+                                                MediaType = part.ContentType.MediaType,
+                                                FilePath = @"D:\Uploads\Ljk\Mail\"
+                                            };
+                                            SaveData(attach.FilePath, attach.FileName, part.Body);
+                                            attaches.Add(attach);
+                                        }
+                                    }
+                                }
+                                mailbox.Attaches = attaches;
+                                ljkContext.MailBoxes.Add(mailbox);
+                                ljkContext.SaveChanges();
+                            }
                         }
                     }
                 }
@@ -193,6 +220,41 @@ namespace MailWinService
             {
                 sw.WriteLine(DateTime.Now + " - Hata: " + logText);
             }
+        }
+
+        protected bool SaveData(string filepath, string fileName, byte[] data)
+        {
+            try
+            {
+                // Create a new stream to write to the file
+                if (!Directory.Exists(filepath)) Directory.CreateDirectory(filepath);
+                var writer = new BinaryWriter(File.OpenWrite(filepath + fileName));
+
+                // Writer raw data                
+                writer.Write(data);
+                writer.Flush();
+                writer.Close();
+            }
+            catch
+            {
+                Logging("Dosyalar yüklenemedi");
+                return false;
+            }
+
+            return true;
+        }
+
+        public string MessageText(MessagePart messagePart)
+        {
+            if (messagePart.IsText)
+            {
+                return messagePart.GetBodyAsText();
+            }
+            foreach (var part in messagePart.MessageParts)
+            {
+                return part.IsText ? part.GetBodyAsText() : MessageText(part);
+            }
+            return "";
         }
     }
 }

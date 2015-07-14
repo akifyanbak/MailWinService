@@ -10,7 +10,7 @@ namespace MailWinService
         static void Main()
         {
             //Debug yapmak için false yapılması gerekiyor
-            const bool debug = true;
+            const bool debug = false;
 
             if (debug)
             {
